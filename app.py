@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import requests
+import json
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 import tensorflow as tf
@@ -34,6 +35,16 @@ model.save("titanic_rnn.h5")
 
 app = Flask(__name__)
 
+BALANCE_FILE = "balances.json"
+
+try:
+    with open(BALANCE_FILE, "r") as f:
+        model_balances = json.load(f)
+except FileNotFoundError:
+    model_balances = {"peer1": 1000, "peer2": 1000, "peer3": 1000}
+    with open(BALANCE_FILE, "w") as f:
+        json.dump(model_balances, f)
+
 @app.route('/predict', methods=['GET'])
 def predict():
     try:
@@ -46,11 +57,15 @@ def predict():
 
 model_weights = {"peer1": 1.0, "peer2": 1.0, "peer3": 1.0}  
 
-def update_weights(predictions, consensus):
-    global model_weights
+def update_weights_and_balance(predictions, consensus):
+    global model_weights, model_balances
     for peer, pred in predictions.items():
         error = abs(pred - consensus)
-        model_weights[peer] = max(0, model_weights[peer] - error * 0.1)  
+        penalty = error * 10 
+        model_weights[peer] = max(0, model_weights[peer] - error * 0.1)
+        model_balances[peer] = max(0, model_balances[peer] - penalty)
+    with open(BALANCE_FILE, "w") as f:
+        json.dump(model_balances, f)
 
 @app.route('/consensus_predict', methods=['GET'])
 def consensus_predict():
@@ -75,12 +90,13 @@ def consensus_predict():
                 weight_total += model_weights[peer]
         
         consensus_prediction = weighted_sum / weight_total if weight_total > 0 else 0
-        update_weights(predictions, consensus_prediction)
+        update_weights_and_balance(predictions, consensus_prediction)
         
         return jsonify({
             "consensus_prediction": int(consensus_prediction > 0.5),
             "average_probability": float(consensus_prediction),
-            "model_weights": model_weights
+            "model_weights": model_weights,
+            "model_balances": model_balances
         })
     except Exception as e:
         return jsonify({"error": str(e)})
