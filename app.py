@@ -44,25 +44,44 @@ def predict():
     except Exception as e:
         return jsonify({"error": str(e)})
 
+model_weights = {"peer1": 1.0, "peer2": 1.0, "peer3": 1.0}  
+
+def update_weights(predictions, consensus):
+    global model_weights
+    for peer, pred in predictions.items():
+        error = abs(pred - consensus)
+        model_weights[peer] = max(0, model_weights[peer] - error * 0.1)  
+
 @app.route('/consensus_predict', methods=['GET'])
 def consensus_predict():
     try:
-        api_urls = [
-            "http://peer1-ngrok-url/predict",
-            "http://peer2-ngrok-url/predict",
-            "http://peer3-ngrok-url/predict"
-        ]
+        api_urls = {
+            "peer1": "http://peer1-ngrok-url/predict",
+            "peer2": "http://peer2-ngrok-url/predict",
+            "peer3": "http://peer3-ngrok-url/predict"
+        }
         
         features = {f: request.args.get(f) for f in ["Pclass", "Sex", "Age", "SibSp", "Parch", "Fare"]}
-        predictions = []
+        predictions = {}
+        weighted_sum = 0
+        weight_total = 0
         
-        for url in api_urls:
+        for peer, url in api_urls.items():
             response = requests.get(url, params=features)
             if response.status_code == 200:
-                predictions.append(response.json()["probability"])
+                prob = response.json()["probability"]
+                predictions[peer] = prob
+                weighted_sum += prob * model_weights[peer]
+                weight_total += model_weights[peer]
         
-        avg_prediction = np.mean(predictions) if predictions else 0
-        return jsonify({"consensus_prediction": int(avg_prediction > 0.5), "average_probability": float(avg_prediction)})
+        consensus_prediction = weighted_sum / weight_total if weight_total > 0 else 0
+        update_weights(predictions, consensus_prediction)
+        
+        return jsonify({
+            "consensus_prediction": int(consensus_prediction > 0.5),
+            "average_probability": float(consensus_prediction),
+            "model_weights": model_weights
+        })
     except Exception as e:
         return jsonify({"error": str(e)})
 
